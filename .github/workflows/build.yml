@@ -15,8 +15,6 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
-
       - name: Create Android project
         run: |
           mkdir -p app/src/main/java/com/coffeetracker/app
@@ -105,12 +103,13 @@ jobs:
                       NotificationChannel ch = new NotificationChannel("coffee", "Кофе", NotificationManager.IMPORTANCE_HIGH);
                       getSystemService(NotificationManager.class).createNotificationChannel(ch);
                   }
-                  if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
+                  if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != 0) {
                       requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 1);
                   }
                   w = new WebView(this);
                   w.getSettings().setJavaScriptEnabled(true);
                   w.getSettings().setDomStorageEnabled(true);
+                  w.getSettings().setMediaPlaybackRequiresUserGesture(false);
                   w.addJavascriptInterface(new Bridge(), "Android");
                   setContentView(w);
                   w.loadUrl("file:///android_asset/index.html");
