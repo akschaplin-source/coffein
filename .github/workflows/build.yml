@@ -18,8 +18,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
-      KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
-      KS_ALIAS: ${{ secrets.KEY_ALIAS }}
       KEY_PASS: ${{ secrets.KEY_PASSWORD }}
       VERSION_CODE: ${{ github.run_number }}
       DO_BUILD: ${{ github.event_name == 'push' || inputs.action == 'build' }}
@@ -34,19 +32,24 @@ jobs:
       - name: Generate signing key
         if: env.DO_KEYGEN == 'true'
         run: |
-          STORE_PASS=$(openssl rand -hex 16)
-          KEY_PASS=$(openssl rand -hex 16)
+          PASS=$(openssl rand -hex 16)
           keytool -genkeypair -v -keystore release.keystore -alias coffee \
             -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass "$STORE_PASS" -keypass "$KEY_PASS" \
+            -storepass "$PASS" -keypass "$PASS" \
             -dname "CN=Coffee Tracker, OU=Dev, O=Coffee, C=RU"
+          keytool -list -keystore release.keystore -storepass "$PASS" > /dev/null
+          echo "keystore self-check OK"
           base64 -w0 release.keystore > keystore-base64.txt
           {
-            echo "KEYSTORE_BASE64:"; cat keystore-base64.txt; echo; echo
-            echo "KEYSTORE_PASSWORD: $STORE_PASS"; echo
-            echo "KEY_ALIAS: coffee"; echo
-            echo "KEY_PASSWORD: $KEY_PASS"; echo
-            echo "HRANI ETOT FAIL I release.keystore V NADYOZHNOOM MESTE"
+            echo "KEYSTORE_BASE64:"
+            cat keystore-base64.txt
+            echo ""
+            echo ""
+            echo "KEY_PASSWORD:"
+            echo "$PASS"
+            echo ""
+            echo "Etot zhe parol podhodit i kak parol hranilisha. Alias: coffee (zashit v workflow)."
+            echo "HRANI ETOT FAIL I release.keystore V NADYOZHNOOM MESTE."
           } > SECRETS.txt
 
       - name: Upload signing key
@@ -133,8 +136,6 @@ jobs:
           plugins { id 'com.android.application' }
           def vc = Integer.parseInt(System.getenv("VERSION_CODE") ?: "1")
           def ksPass = System.getenv("KS_PASS") ?: ""
-          def ksAlias = System.getenv("KS_ALIAS") ?: "coffee"
-          def keyPass = System.getenv("KEY_PASS") ?: ""
           android {
               namespace 'com.coffeetracker.app'
               compileSdk 34
@@ -150,8 +151,8 @@ jobs:
                   release {
                       storeFile file("release.keystore")
                       storePassword ksPass
-                      keyAlias ksAlias
-                      keyPassword keyPass
+                      keyAlias "coffee"
+                      keyPassword ksPass
                   }
               }
               buildTypes {
@@ -232,12 +233,20 @@ jobs:
         run: |
           mkdir -p out
           if [ -n "$KS_B64" ]; then
-            echo "Signing: RELEASE (secrets found)"
-            echo "$KS_B64" | base64 -d > app/release.keystore
+            B64=$(printf '%s' "$KS_B64" | tr -d ' \t\r\n')
+            KP=$(printf '%s' "$KEY_PASS" | tr -d ' \t\r\n')
+            printf '%s' "$B64" | base64 -d > app/release.keystore
+            export KS_PASS="$KP"
+            if keytool -list -keystore app/release.keystore -storepass "$KP" > /dev/null 2>&1; then
+              echo "Signing: RELEASE (keystore verified)"
+            else
+              echo "::error::Пароль не подходит к ключу. Удали оба секрета, запусти keygen ещё раз и добавь 2 секрета из ОДНОГО файла SECRETS.txt того же запуска."
+              exit 1
+            fi
             gradle assembleRelease --no-daemon
             cp app/build/outputs/apk/release/app-release.apk out/coffee-tracker-release.apk
           else
-            echo "::warning::Секреты подписи не найдены — собран DEBUG APK. Для RuStore добавь 4 секрета."
+            echo "::warning::Секреты подписи не найдены — собран DEBUG APK. Для RuStore добавь 2 секрета."
             gradle assembleDebug --no-daemon
             cp app/build/outputs/apk/debug/app-debug.apk out/coffee-tracker-debug.apk
           fi
