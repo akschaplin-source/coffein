@@ -131,6 +131,10 @@ jobs:
           EOF
           cat > app/build.gradle << 'EOF'
           plugins { id 'com.android.application' }
+          def vc = Integer.parseInt(System.getenv("VERSION_CODE") ?: "1")
+          def ksPass = System.getenv("KS_PASS") ?: ""
+          def ksAlias = System.getenv("KS_ALIAS") ?: "coffee"
+          def keyPass = System.getenv("KEY_PASS") ?: ""
           android {
               namespace 'com.coffeetracker.app'
               compileSdk 34
@@ -139,15 +143,15 @@ jobs:
                   applicationId "com.coffeetracker.app"
                   minSdk 24
                   targetSdk 34
-                  versionCode (System.getenv("VERSION_CODE") ?: "1").toInteger()
-                  versionName "1.0." + (System.getenv("VERSION_CODE") ?: "1")
+                  versionCode vc
+                  versionName "1.0." + vc
               }
               signingConfigs {
                   release {
                       storeFile file("release.keystore")
-                      storePassword System.getenv("KS_PASS") ?: ""
-                      keyAlias System.getenv("KS_ALIAS") ?: "coffee"
-                      keyPassword System.getenv("KEY_PASS") ?: ""
+                      storePassword ksPass
+                      keyAlias ksAlias
+                      keyPassword keyPass
                   }
               }
               buildTypes {
