@@ -14,15 +14,25 @@ permissions:
   contents: write
 
 jobs:
-  keygen:
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'keygen'
+  build:
     runs-on: ubuntu-latest
+    env:
+      KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
+      KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+      KS_ALIAS: ${{ secrets.KEY_ALIAS }}
+      KEY_PASS: ${{ secrets.KEY_PASSWORD }}
+      VERSION_CODE: ${{ github.run_number }}
+      DO_BUILD: ${{ github.event_name == 'push' || inputs.action == 'build' }}
+      DO_KEYGEN: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'keygen' }}
     steps:
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
-      - name: Generate permanent signing key
+
+      - name: Generate signing key
+        if: env.DO_KEYGEN == 'true'
         run: |
           STORE_PASS=$(openssl rand -hex 16)
           KEY_PASS=$(openssl rand -hex 16)
@@ -32,24 +42,16 @@ jobs:
             -dname "CN=Coffee Tracker, OU=Dev, O=Coffee, C=RU"
           base64 -w0 release.keystore > keystore-base64.txt
           {
-            echo "=== ДОБАВЬ В Settings -> Secrets and variables -> Actions ==="
-            echo ""
-            echo "Имя секрета: KEYSTORE_BASE64"
-            echo "Значение (одна строка, целиком):"
-            cat keystore-base64.txt
-            echo ""
-            echo "Имя секрета: KEYSTORE_PASSWORD"
-            echo "Значение: $STORE_PASS"
-            echo ""
-            echo "Имя секрета: KEY_ALIAS"
-            echo "Значение: coffee"
-            echo ""
-            echo "Имя секрета: KEY_PASSWORD"
-            echo "Значение: $KEY_PASS"
-            echo ""
-            echo "=== ХРАНИ ФАЙЛ И release.keystore ВНЕ GITHUB ==="
+            echo "KEYSTORE_BASE64:"; cat keystore-base64.txt; echo; echo
+            echo "KEYSTORE_PASSWORD: $STORE_PASS"; echo
+            echo "KEY_ALIAS: coffee"; echo
+            echo "KEY_PASSWORD: $KEY_PASS"; echo
+            echo "HRANI ETOT FAIL I release.keystore V NADYOZHNOOM MESTE"
           } > SECRETS.txt
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload signing key
+        if: env.DO_KEYGEN == 'true'
+        uses: actions/upload-artifact@v4
         with:
           name: signing-key
           path: |
@@ -57,28 +59,13 @@ jobs:
             keystore-base64.txt
             SECRETS.txt
           retention-days: 30
+          if-no-files-found: error
 
-  build:
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.action == 'build')
-    runs-on: ubuntu-latest
-    env:
-      KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
-      KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
-      KS_ALIAS: ${{ secrets.KEY_ALIAS }}
-      KEY_PASS: ${{ secrets.KEY_PASSWORD }}
-      VERSION_CODE: ${{ github.run_number }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Generate beautiful icons
+      - name: Generate app icons
+        if: env.DO_BUILD == 'true'
         run: |
           cat > gen_icons.py << 'PY'
           import zlib,struct,os,math
-          SS=3
           def chunk(t,d):
               c=struct.pack('>I',len(d))+t+d
               return c+struct.pack('>I',zlib.crc32(t+d)&0xffffffff)
@@ -86,130 +73,44 @@ jobs:
               raw=b''.join(b'\x00'+bytes(px[y*w*4:(y+1)*w*4]) for y in range(h))
               return (b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',w,h,8,6,0,0,0))
                       +chunk(b'IDAT',zlib.compress(raw,9))+chunk(b'IEND',b''))
-          def lerp(a,b,t): return tuple(int(a[i]+(b[i]-a[i])*t) for i in range(3))
-          def rr(u,v,x0,y0,x1,y1,r):
-              dx=max(x0+r-u,0,u-(x1-r)); dy=max(y0+r-v,0,v-(y1-r))
-              return dx*dx+dy*dy<=r*r
-          def render(s,mode):
-              W=s*SS; buf=bytearray(W*W*4)
-              def over(x,y,r,g,b,a):
-                  if a<=0: return
-                  i=(y*W+x)*4; da=buf[i+3]
-                  if da==0:
-                      buf[i]=r;buf[i+1]=g;buf[i+2]=b;buf[i+3]=a;return
-                  na=a+da*(255-a)//255
-                  if na==0: return
-                  buf[i]=(r*a+buf[i]*da*(255-a)//255)//na
-                  buf[i+1]=(g*a+buf[i+1]*da*(255-a)//255)//na
-                  buf[i+2]=(b*a+buf[i+2]*da*(255-a)//255)//na
-                  buf[i+3]=na
-              k=0.66 if mode=='fg' else 1.0
-              def uv(x,y):
-                  u=(x/W-0.5)/k+0.5; v=(y/W-0.5)/k+0.5; return u,v
-              if mode in ('full','store','bg'):
-                  for y in range(W):
-                      v=y/W
-                      for x in range(W):
-                          u=x/W
-                          c=lerp((58,44,34),(20,16,13),(u+v)/2)
-                          g=math.exp(-((u-0.32)**2+(v-0.26)**2)/0.10)*46
-                          c=(min(255,int(c[0]+g)),min(255,int(c[1]+g*0.8)),min(255,int(c[2]+g*0.5)))
-                          a=255
-                          if mode=='full': a=255 if rr(u,v,0,0,1,1,0.22) else 0
-                          if mode=='bg': a=255
-                          over(x,y,c[0],c[1],c[2],a)
-              if mode=='stat':
-                  for y in range(W):
-                      for x in range(W):
-                          u,v=x/W,y/W; hit=False
-                          if rr(u,v,0.295,0.40,0.665,0.80,0.10): hit=True
-                          if rr(u,v,0.22,0.80,0.78,0.865,0.03): hit=True
-                          d=abs(math.hypot(u-0.705,v-0.565)-0.115)
-                          if d<0.036 and u>=0.695: hit=True
-                          for cx0 in (0.40,0.545):
-                              cx=cx0+0.022*math.sin((v-0.16)*26)
-                              sl=0.022*26*math.cos((v-0.16)*26)
-                              if 0.14<v<0.355 and abs(u-cx)/math.sqrt(1+sl*sl)<0.016: hit=True
-                          if hit: over(x,y,255,255,255,255)
-              else:
-                  for y in range(int(0.78*W),int(0.95*W)):
-                      for x in range(int(0.15*W),int(0.85*W)):
-                          u,v=uv(x,y)
-                          d=((u-0.5)/0.30)**2+((v-0.86)/0.055)**2
-                          if d<1: over(x,y,0,0,0,int(110*(1-d)))
-                  for y in range(int(0.76*W),int(0.90*W)):
-                      for x in range(int(0.18*W),int(0.82*W)):
-                          u,v=uv(x,y)
-                          if rr(u,v,0.22,0.80,0.78,0.865,0.03):
-                              c=lerp((196,150,102),(140,100,62),(v-0.80)/0.065)
-                              over(x,y,c[0],c[1],c[2],255)
-                  for y in range(int(0.40*W),int(0.72*W)):
-                      for x in range(int(0.62*W),int(0.86*W)):
-                          u,v=uv(x,y)
-                          d=abs(math.hypot(u-0.705,v-0.565)-0.115)
-                          if d<0.036 and u>=0.695:
-                              c=lerp((232,222,210),(200,189,175),(u-0.66)/0.16)
-                              over(x,y,c[0],c[1],c[2],255)
-                  for y in range(int(0.36*W),int(0.84*W)):
-                      for x in range(int(0.26*W),int(0.70*W)):
-                          u,v=uv(x,y)
-                          if rr(u,v,0.295,0.40,0.665,0.80,0.10):
-                              c=lerp((243,236,226),(214,203,188),(v-0.40)/0.40)
-                              if u<0.36: c=tuple(min(255,q+12) for q in c)
-                              over(x,y,c[0],c[1],c[2],255)
-                  for y in range(int(0.36*W),int(0.50*W)):
-                      for x in range(int(0.26*W),int(0.70*W)):
-                          u,v=uv(x,y)
-                          if ((u-0.48)/0.185)**2+((v-0.435)/0.045)**2<=1:
-                              c=lerp((206,164,116),(150,104,62),(u-0.30)/0.37)
-                              over(x,y,c[0],c[1],c[2],255)
-                  for y in range(int(0.12*W),int(0.38*W)):
-                      for x in range(int(0.34*W),int(0.60*W)):
-                          u,v=uv(x,y)
-                          for cx0 in (0.40,0.545):
-                              cx=cx0+0.022*math.sin((v-0.16)*26)
-                              sl=0.022*26*math.cos((v-0.16)*26)
-                              d=abs(u-cx)/math.sqrt(1+sl*sl)
-                              if 0.14<v<0.355 and d<0.016:
-                                  tap=max(0.0,min(1.0,min(v-0.14,0.355-v)/0.04))
-                                  over(x,y,201,179,148,int(210*tap))
-              out=bytearray(s*s*4); n=SS*SS
-              for ty in range(s):
-                  for tx in range(s):
-                      sr=sg=sb=sa=0
-                      for dy in range(SS):
-                          row=((ty*SS+dy)*W+tx*SS)*4
-                          for dx in range(SS):
-                              i=row+dx*4; a=buf[i+3]
-                              sr+=buf[i]*a; sg+=buf[i+1]*a; sb+=buf[i+2]*a; sa+=a
-                      o=(ty*s+tx)*4
-                      if sa:
-                          out[o]=sr//sa; out[o+1]=sg//sa; out[o+2]=sb//sa; out[o+3]=sa//n
-              return png(s,s,out)
-          DENS={'mdpi':48,'hdpi':72,'xhdpi':96,'xxhdpi':144,'xxxhdpi':192}
-          for d,s in DENS.items():
-              p='app/src/main/res/mipmap-'+d; os.makedirs(p,exist_ok=True)
-              open(p+'/ic_launcher.png','wb').write(render(s,'full'))
-              open(p+'/ic_launcher_foreground.png','wb').write(render(s,'fg'))
-              open(p+'/ic_launcher_background.png','wb').write(render(s,'bg'))
-          for d,s in {'mdpi':24,'hdpi':36,'xhdpi':48,'xxhdpi':72,'xxxhdpi':96}.items():
-              p='app/src/main/res/drawable-'+d; os.makedirs(p,exist_ok=True)
-              open(p+'/ic_stat_coffee.png','wb').write(render(s,'stat'))
-          os.makedirs('app/src/main/res/mipmap-anydpi-v26',exist_ok=True)
-          AD='<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n    <background android:drawable="@mipmap/ic_launcher_background"/>\n    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>\n    <monochrome android:drawable="@mipmap/ic_launcher_foreground"/>\n</adaptive-icon>\n'
-          open('app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml','w').write(AD)
-          open('app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml','w').write(AD)
-          open('rustore-icon-512.png','wb').write(render(512,'store'))
+          def draw(s):
+              px=bytearray(s*s*4)
+              bg=(36,31,27,255);cup=(232,224,214,255);cof=(194,154,107,255);sau=(169,126,79,255);stm=(143,133,122,255)
+              def put(x,y,c):
+                  if 0<=x<s and 0<=y<s:
+                      i=(y*s+x)*4;px[i:i+4]=bytes(c)
+              def rr(x0,y0,x1,y1,r,c):
+                  for y in range(int(y0),int(y1)):
+                      for x in range(int(x0),int(x1)):
+                          dx=max(x0+r-x,0,x-(x1-r));dy=max(y0+r-y,0,y-(y1-r))
+                          if dx*dx+dy*dy<=r*r:put(x,y,c)
+              rr(0,0,s,s,0.22*s,bg)
+              rr(0.38*s,0.20*s,0.42*s,0.34*s,0.02*s,stm)
+              rr(0.52*s,0.18*s,0.56*s,0.34*s,0.02*s,stm)
+              cx,cy,R,t=0.70*s,0.56*s,0.11*s,0.035*s
+              for y in range(int(0.40*s),int(0.72*s)):
+                  for x in range(int(0.66*s),int(0.86*s)):
+                      d=math.hypot(x-cx,y-cy)
+                      if abs(d-R)<t and x>=cx:put(x,y,cup)
+              rr(0.30*s,0.40*s,0.66*s,0.80*s,0.10*s,cup)
+              rr(0.30*s,0.40*s,0.66*s,0.47*s,0.05*s,cof)
+              rr(0.24*s,0.82*s,0.76*s,0.87*s,0.025*s,sau)
+              return px
+          for d,s in {'mipmap-mdpi':48,'mipmap-hdpi':72,'mipmap-xhdpi':96,'mipmap-xxhdpi':144,'mipmap-xxxhdpi':192}.items():
+              p='app/src/main/res/'+d
+              os.makedirs(p,exist_ok=True)
+              open(p+'/ic_launcher.png','wb').write(png(s,s,draw(s)))
+          open('rustore-icon-512.png','wb').write(png(512,512,draw(512)))
           print('icons ok')
           PY
           python3 gen_icons.py
 
       - name: Create Android project
+        if: env.DO_BUILD == 'true'
         run: |
           mkdir -p app/src/main/java/com/coffeetracker/app
           mkdir -p app/src/main/assets
           cp index.html app/src/main/assets/index.html
-
           cat > settings.gradle << 'EOF'
           pluginManagement {
               repositories { google(); mavenCentral(); gradlePluginPortal() }
@@ -221,6 +122,147 @@ jobs:
           rootProject.name = "CoffeeTracker"
           include ':app'
           EOF
-
           cat > build.gradle << 'EOF'
-          plugins { id 'com.android.application' version
+          plugins { id 'com.android.application' version '8.1.4' apply false }
+          EOF
+          cat > gradle.properties << 'EOF'
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx2048m
+          EOF
+          cat > app/build.gradle << 'EOF'
+          plugins { id 'com.android.application' }
+          android {
+              namespace 'com.coffeetracker.app'
+              compileSdk 34
+              buildToolsVersion "34.0.0"
+              defaultConfig {
+                  applicationId "com.coffeetracker.app"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode (System.getenv("VERSION_CODE") ?: "1").toInteger()
+                  versionName "1.0." + (System.getenv("VERSION_CODE") ?: "1")
+              }
+              signingConfigs {
+                  release {
+                      storeFile file("release.keystore")
+                      storePassword System.getenv("KS_PASS") ?: ""
+                      keyAlias System.getenv("KS_ALIAS") ?: "coffee"
+                      keyPassword System.getenv("KEY_PASS") ?: ""
+                  }
+              }
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                      minifyEnabled false
+                  }
+              }
+          }
+          dependencies { implementation 'androidx.appcompat:appcompat:1.6.1' }
+          EOF
+          cat > app/src/main/AndroidManifest.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.VIBRATE" />
+              <application android:label="Кофе Трекер"
+                  android:icon="@mipmap/ic_launcher"
+                  android:roundIcon="@mipmap/ic_launcher"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+          cat > app/src/main/java/com/coffeetracker/app/MainActivity.java << 'EOF'
+          package com.coffeetracker.app;
+          import android.app.*;
+          import android.os.*;
+          import android.webkit.*;
+          import androidx.core.app.*;
+          public class MainActivity extends Activity {
+              WebView w;
+              @Override protected void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  if (Build.VERSION.SDK_INT >= 26) {
+                      NotificationChannel ch = new NotificationChannel("coffee", "Кофе", NotificationManager.IMPORTANCE_HIGH);
+                      getSystemService(NotificationManager.class).createNotificationChannel(ch);
+                  }
+                  if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != 0) {
+                      requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 1);
+                  }
+                  w = new WebView(this);
+                  w.getSettings().setJavaScriptEnabled(true);
+                  w.getSettings().setDomStorageEnabled(true);
+                  w.getSettings().setMediaPlaybackRequiresUserGesture(false);
+                  w.addJavascriptInterface(new Bridge(), "Android");
+                  setContentView(w);
+                  w.loadUrl("file:///android_asset/index.html");
+              }
+              class Bridge {
+                  @JavascriptInterface public void notify(String title, String body) {
+                      try {
+                          NotificationCompat.Builder nb = new NotificationCompat.Builder(MainActivity.this, "coffee")
+                              .setSmallIcon(android.R.drawable.ic_dialog_info)
+                              .setContentTitle(title).setContentText(body)
+                              .setPriority(NotificationCompat.PRIORITY_HIGH)
+                              .setVibrate(new long[]{200,100,200}).setAutoCancel(true);
+                          NotificationManagerCompat.from(MainActivity.this).notify(1, nb.build());
+                      } catch (Exception e) {}
+                  }
+              }
+          }
+          EOF
+
+      - name: Setup Gradle
+        if: env.DO_BUILD == 'true'
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.4'
+
+      - name: Build APK
+        if: env.DO_BUILD == 'true'
+        run: |
+          mkdir -p out
+          if [ -n "$KS_B64" ]; then
+            echo "Signing: RELEASE (secrets found)"
+            echo "$KS_B64" | base64 -d > app/release.keystore
+            gradle assembleRelease --no-daemon
+            cp app/build/outputs/apk/release/app-release.apk out/coffee-tracker-release.apk
+          else
+            echo "::warning::Секреты подписи не найдены — собран DEBUG APK. Для RuStore добавь 4 секрета."
+            gradle assembleDebug --no-daemon
+            cp app/build/outputs/apk/debug/app-debug.apk out/coffee-tracker-debug.apk
+          fi
+          ls -la out
+          test -s out/coffee-tracker-release.apk || test -s out/coffee-tracker-debug.apk
+
+      - name: Upload APK
+        if: env.DO_BUILD == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coffee-apk
+          path: out/*.apk
+          if-no-files-found: error
+
+      - name: Upload RuStore icon
+        if: env.DO_BUILD == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustore-icon
+          path: rustore-icon-512.png
+          if-no-files-found: error
+
+      - name: Publish Release
+        if: env.DO_BUILD == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          files: |
+            out/*.apk
+            rustore-icon-512.png
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
